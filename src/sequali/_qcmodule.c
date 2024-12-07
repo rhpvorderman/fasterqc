@@ -725,78 +725,85 @@ is_space(char c)
     return (c == ' ' || c == '\t');
 }
 
-/**
- * @brief strcspn(str, " \t") replacement with length. Returns the offset of
- * ' ' or '\t' or the length of the string.
- *
- * @param str
- * @param length
- * @return size_t
- */
 static inline size_t
-find_space(const char *restrict str, size_t length)
+has_space(size_t stretch)
 {
-    const char *restrict cursor = str;
-    const char *end = str + length;
-    const char *vec_end = end - 7;
-    while (cursor < vec_end) {
-        /* Fixed size for loop allows compiler to use inline vectors. */
-        char results[8];
-        for (size_t i = 0; i < 8; i++) {
-            /* Set all bits when is_space is true. This is the same result as
-               when _mm_cmpeq_epi8 is used. Hence an extra AND instruction is
-               prevented. */
-            results[i] = is_space(cursor[i]) ? -1 : 0;
-        }
-        uint64_t *result = (uint64_t *)results;
-        if (result[0]) {
-            break;
-        }
-        cursor += 8;
+    uint8_t store[sizeof(size_t)];
+    uint8_t result[sizeof(size_t)];
+    ((size_t *)store)[0] = stretch;
+    for (size_t i = 0; i < sizeof(size_t); i++) {
+        result[i] = is_space(store[i]) ? 255 : 0;
     }
-    while (cursor < end) {
-        if (is_space(*cursor)) {
-            break;
-        }
-        cursor++;
-    }
-    return cursor - str;
+    return ((size_t *)result)[0];
 }
 
-/**
- * @brief Compare two FASTQ record names to see if they are mates.
- *
- * They are mates if their IDs are the same. The ID is the part before the
- * first whitespace. If the last symbol of both IDs is a '1' or '2' it is
- * ignored to allow 'record/1' and 'record/2' to match.
- *
- * @param name1 Pointer to the first name
- * @param name2 Pointer to the second name
- * @param name2_length The length of the second name
- */
 static inline bool
-fastq_names_are_mates(const char *name1, const char *name2,
+fastq_names_are_mates(const char *restrict name1, const char *restrict name2,
                       size_t name1_length, size_t name2_length)
 {
-    size_t id_length = find_space(name1, name1_length);
-    if (name2_length < id_length) {
-        return false;
-    }
-    if (name2_length > id_length) {
-        char id2_sep = name2[id_length];
-        if (!(id2_sep == ' ' || id2_sep == '\t')) {
-            return false;
+    size_t shortest_length =
+        name1_length < name2_length ? name1_length : name2_length;
+    const char *name1_end = name1 + name1_length;
+    const char *name2_end = name1 + name2_length;
+    const char *end_ptr = name1 + shortest_length;
+    const char *vec_end_ptr = end_ptr - (sizeof(size_t) - 1);
+    const char *restrict name1_cursor = name1;
+    const char *restrict name2_cursor = name2;
+    char name1_c = 0;
+    char name2_c = 0;
+
+    while (name1_cursor < vec_end_ptr) {
+        size_t name1_stretch = ((size_t *)name1_cursor)[0];
+        size_t name2_stretch = ((size_t *)name2_cursor)[0];
+        if (name1_stretch != name2_stretch) {
+            break;
         }
-    }
-    /* Make sure /1 and /2 endings are ignored. */
-    char id1_last_char = name1[id_length - 1];
-    if (id1_last_char == '1' || id1_last_char == '2') {
-        char id2_last_char = name2[id_length - 1];
-        if (id2_last_char == '1' || id2_last_char == '2') {
-            id_length -= 1;
+        if (has_space(name1_stretch)) {
+            break;
         }
+        name1_cursor += sizeof(size_t);
+        name2_cursor += sizeof(size_t);
     }
-    return memcmp(name1, name2, id_length) == 0;
+
+    while (name1_cursor < end_ptr) {
+        name1_c = *name1_cursor;
+        name2_c = *name2_cursor;
+        if (name1_c != name2_c) {
+            break;
+        }
+        if (is_space(name1_c)) {
+            // name2_c is also a space/tab because they are equal.
+            return true;
+        }
+        name1_cursor += 1;
+        name2_cursor += 1;
+    }
+    if (name1_cursor == end_ptr) {
+        // reached end of one of the strings
+        bool at_name1_end =
+            (name1_cursor == name1_end) || is_space((name1_cursor)[0]);
+        bool at_name2_end =
+            (name2_cursor == name2_end) || is_space((name2_cursor)[0]);
+        return at_name1_end && at_name2_end;
+    }
+    /* This code only runs when a difference has been found */
+    /* Check if the difference is in the last character before the end. */
+    bool at_name1_end =
+        (name1_cursor + 1 == name1_end) || is_space((name1_cursor)[1]);
+    bool at_name2_end =
+        (name2_cursor + 1 == name2_end) || is_space((name2_cursor)[1]);
+    if (!(at_name1_end && at_name2_end)) {
+        return false;  // Only differences at the end are allowed.
+    }
+    /* Corner case, same ID, but one uses tab and the other space to separate. */
+    if (is_space(name1_c) && is_space(name2_c)) {
+        return true;
+    }
+    /* Older FASTQ file sometimes have the ID ending with 1 or 2 depending on mate pair status. */
+    if ((name1_c == '1' || name1_c == '2') && (name2_c == '1' || name2_c == '2')) {
+        return true;
+    }
+    return false;
 }
 
 PyDoc_STRVAR(
