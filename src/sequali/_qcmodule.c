@@ -765,7 +765,14 @@ fastq_names_are_mates(const char *restrict name1, const char *restrict name2,
         name2_cursor += sizeof(size_t);
     }
 
-    while (name1_cursor < end_ptr) {
+    while (true) {
+        if (name1_cursor == end_ptr) {
+            bool at_name1_end =
+                (name1_cursor == name1_end) || is_space((name1_cursor)[0]);
+            bool at_name2_end =
+                (name2_cursor == name2_end) || is_space((name2_cursor)[0]);
+            return at_name1_end && at_name2_end;
+        }
         name1_c = *name1_cursor;
         name2_c = *name2_cursor;
         if (name1_c != name2_c) {
@@ -778,14 +785,6 @@ fastq_names_are_mates(const char *restrict name1, const char *restrict name2,
         name1_cursor += 1;
         name2_cursor += 1;
     }
-    if (name1_cursor == end_ptr) {
-        // reached end of one of the strings
-        bool at_name1_end =
-            (name1_cursor == name1_end) || is_space((name1_cursor)[0]);
-        bool at_name2_end =
-            (name2_cursor == name2_end) || is_space((name2_cursor)[0]);
-        return at_name1_end && at_name2_end;
-    }
     /* This code only runs when a difference has been found */
     /* Check if the difference is in the last character before the end. */
     bool at_name1_end =
@@ -795,12 +794,13 @@ fastq_names_are_mates(const char *restrict name1, const char *restrict name2,
     if (!(at_name1_end && at_name2_end)) {
         return false;  // Only differences at the end are allowed.
     }
-    /* Corner case, same ID, but one uses tab and the other space to separate. */
-    if (is_space(name1_c) && is_space(name2_c)) {
-        return true;
-    }
+
     /* Older FASTQ file sometimes have the ID ending with 1 or 2 depending on mate pair status. */
     if ((name1_c == '1' || name1_c == '2') && (name2_c == '1' || name2_c == '2')) {
+        return true;
+    }
+    /* Corner case, same ID, but one uses tab and the other space to separate. */
+    if (is_space(name1_c) && is_space(name2_c)) {
         return true;
     }
     return false;
